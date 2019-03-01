@@ -1,3 +1,4 @@
+import math
 import pywaves
 import axolotl_curve25519 as curve
 import os
@@ -202,8 +203,6 @@ class Address(object):
             raise ValueError('Nonce must be between 0 and 4294967295')
         if seed:
             self._generate(seed=seed, nonce=nonce)
-        elif privateKey:
-            self._generate(privateKey=privateKey)
         elif publicKey:
             self._generate(publicKey=publicKey)
         elif address:
@@ -221,6 +220,11 @@ class Address(object):
             self.privateKey = ''
             self.seed = ''
             self.nonce = 0
+        elif privateKey == '' or privateKey:
+            if len(privateKey) == 0:
+                raise ValueError('Empty private key not allowed')
+            else:
+                self._generate(privateKey=privateKey)
         else:
             self._generate(nonce=nonce)
         if not pywaves.OFFLINE:
@@ -412,19 +416,21 @@ class Address(object):
                     crypto.str2bytes(attachment)
             signature = crypto.sign(self.privateKey, sData)
             data = json.dumps({
+                "version": 2,
                 "senderPublicKey": self.publicKey,
                 "recipient": recipient.address,
                 "amount": amount,
                 "fee": txFee,
                 "timestamp": timestamp,
                 "attachment": base58.b58encode(crypto.str2bytes(attachment)),
-                "signature": signature
+                "signature": signature,
+                "proofs": [ signature ]
             })
 
             return pywaves.wrapper('/assets/broadcast/transfer', data)
 
     def massTransferWaves(self, transfers, attachment='', timestamp=0):
-        txFee = 100000 + len(transfers) * 50000
+        txFee = 100000 + (math.ceil((len(transfers) + 1) / 2 - 0.5)) * 100000
         totalAmount = 0
 
         for i in range(0, len(transfers)):
@@ -508,6 +514,10 @@ class Address(object):
             logging.error(msg)
             pywaves.throw_error(msg)
         else:
+            if feeAsset:
+                feeInfos = pywaves.wrapper('/assets/details/' + feeAsset.assetId)
+                if feeInfos['minSponsoredAssetFee']:
+                    txFee = feeInfos['minSponsoredAssetFee']
             if timestamp == 0:
                 timestamp = int(time.time() * 1000)
             sData = b'\4' + \
@@ -522,6 +532,7 @@ class Address(object):
                     crypto.str2bytes(attachment)
             signature = crypto.sign(self.privateKey, sData)
             data = json.dumps({
+                "version": 2,
                 "assetId": (asset.assetId if asset else ""),
                 "feeAssetId": (feeAsset.assetId if feeAsset else ""),
                 "senderPublicKey": self.publicKey,
@@ -530,24 +541,28 @@ class Address(object):
                 "fee": txFee,
                 "timestamp": timestamp,
                 "attachment": base58.b58encode(crypto.str2bytes(attachment)),
-                "signature": signature
+                "signature": signature,
+                "proofs": [ signature ]
             })
 
             return pywaves.wrapper('/assets/broadcast/transfer', data)
 
     def massTransferAssets(self, transfers, asset, attachment='', timestamp=0):
-        txFee = 100000 + len(transfers) * 50000
+        txFee = 100000 + (math.ceil((len(transfers) + 1) / 2 - 0.5)) * 100000
+
+        if (asset.isSmart()):
+            txFee += 400000
+
         totalAmount = 0
 
         if not self.privateKey:
             logging.error('Private key required')
         elif len(transfers) > 100:
             logging.error('Too many recipients')
-        elif not pywaves.OFFLINE:
-            if self.balance() < txFee:
-                logging.error('Insufficient Waves balance')
-            if self.balance(assetId=asset.assetId) < totalAmount:
-                logging.error('Insufficient %s balance' % asset.name)
+        elif not pywaves.OFFLINE and self.balance() < txFee:
+            logging.error('Insufficient Waves balance')
+        elif not pywaves.OFFLINE and self.balance(assetId=asset.assetId) < totalAmount:
+            logging.error('Insufficient %s balance' % asset.name)
         else:
             if timestamp == 0:
                 timestamp = int(time.time() * 1000)
@@ -677,6 +692,7 @@ class Address(object):
             "signature": signature
         })
         req = pywaves.wrapper('/matcher/orderbook', data, host=pywaves.MATCHER)
+        print(req)
         id = -1
         if 'status' in req:
             if req['status'] == 'OrderRejected':
@@ -743,7 +759,7 @@ class Address(object):
 
     def buy(self, assetPair, amount, price, maxLifetime=30 * 86400, matcherFee=pywaves.DEFAULT_MATCHER_FEE, timestamp=0):
         assetPair.refresh()
-        normPrice = int(pow(10, 8 - assetPair.asset1.decimals) * price)
+        normPrice = int(pow(10, assetPair.asset2.decimals - assetPair.asset1.decimals) * price)
         id = self._postOrder(assetPair.asset1, assetPair.asset2, b'\0', amount, normPrice, maxLifetime, matcherFee, timestamp)
         if pywaves.OFFLINE:
             return id
@@ -752,7 +768,7 @@ class Address(object):
 
     def sell(self, assetPair, amount, price, maxLifetime=30 * 86400, matcherFee=pywaves.DEFAULT_MATCHER_FEE, timestamp=0):
         assetPair.refresh()
-        normPrice = int(pow(10, 8 - assetPair.asset1.decimals) * price)
+        normPrice = int(pow(10, assetPair.asset2.decimals - assetPair.asset1.decimals) * price)
         id = self._postOrder(assetPair.asset1, assetPair.asset2, b'\1', amount, normPrice, maxLifetime, matcherFee, timestamp)
         if pywaves.OFFLINE:
             return id
@@ -805,10 +821,6 @@ class Address(object):
             })
             req = pywaves.wrapper('/leasing/broadcast/lease', data)
             return req
-            if pywaves.OFFLINE:
-                return req
-            else:
-                return req['id']
 
     def leaseCancel(self, leaseId, txFee=pywaves.DEFAULT_LEASE_FEE, timestamp=0):
         if not self.privateKey:
@@ -945,8 +957,8 @@ class Address(object):
         if not self.privateKey:
             logging.error('Private key required')
         else:
-            rawScript = base64.b64decode(script)
-            scriptLength = len(rawScript)
+            compiledScript = base64.b64decode(script)
+            scriptLength = len(compiledScript)
             if timestamp == 0:
                 timestamp = int(time.time() * 1000)
             sData = b'\x0d' + \
@@ -955,7 +967,7 @@ class Address(object):
                 base58.b58decode(self.publicKey) + \
                 b'\1' + \
                 struct.pack(">H", scriptLength) + \
-                crypto.str2bytes(str(rawScript)) + \
+                compiledScript + \
                 struct.pack(">Q", txFee) + \
                 struct.pack(">Q", timestamp)
             signature = crypto.sign(self.privateKey, sData)
@@ -974,3 +986,91 @@ class Address(object):
 
             return pywaves.wrapper('/transactions/broadcast', data)
 
+    def setAssetScript(self, asset, scriptSource, txFee=pywaves.DEFAULT_ASSET_SCRIPT_FEE, timestamp=0):
+        script = pywaves.wrapper('/utils/script/compile', scriptSource)['script'][7:]
+        if not self.privateKey:
+            logging.error('Private key required')
+        else:
+            compiledScript = base64.b64decode(script)
+            scriptLength = len(compiledScript)
+            if timestamp == 0:
+                timestamp = int(time.time() * 1000)
+            sData = b'\x0f' + \
+                b'\1' + \
+                crypto.str2bytes(str(pywaves.CHAIN_ID)) + \
+                base58.b58decode(self.publicKey) + \
+                base58.b58decode(asset.assetId) + \
+                struct.pack(">Q", txFee) + \
+                struct.pack(">Q", timestamp) + \
+                b'\1' + \
+                struct.pack(">H", scriptLength) + \
+                compiledScript
+            signature = crypto.sign(self.privateKey, sData)
+
+            data = json.dumps({
+                "type": 15,
+                "version": 1,
+                "assetId": asset.assetId,
+                "senderPublicKey": self.publicKey,
+                "fee": txFee,
+                "timestamp": timestamp,
+                "script": 'base64:' + script,
+                "proofs": [
+                    signature
+                ]
+            })
+            print(data)
+
+            return pywaves.wrapper('/transactions/broadcast', data)
+
+    def issueSmartAsset(self, name, description, quantity, scriptSource, decimals=0, reissuable=False, txFee=pywaves.DEFAULT_ASSET_FEE):
+        script = pywaves.wrapper('/utils/script/compile', scriptSource)['script'][7:]
+        if not self.privateKey:
+            msg = 'Private key required'
+            logging.error(msg)
+            pywaves.throw_error(msg)
+        elif len(name) < 4 or len(name) > 16:
+            msg = 'Asset name must be between 4 and 16 characters long'
+            logging.error(msg)
+            pywaves.throw_error(msg)
+        else:
+            compiledScript = base64.b64decode(script)
+            scriptLength = len(compiledScript)
+            timestamp = int(time.time() * 1000)
+            sData = b'\3' + \
+                    b'\2' + \
+                    crypto.str2bytes(str(pywaves.CHAIN_ID)) + \
+                    base58.b58decode(self.publicKey) + \
+                    struct.pack(">H", len(name)) + \
+                    crypto.str2bytes(name) + \
+                    struct.pack(">H", len(description)) + \
+                    crypto.str2bytes(description) + \
+                    struct.pack(">Q", quantity) + \
+                    struct.pack(">B", decimals) + \
+                    (b'\1' if reissuable else b'\0') + \
+                    struct.pack(">Q", txFee) + \
+                    struct.pack(">Q", timestamp) + \
+                    b'\1' + \
+                    struct.pack(">H", scriptLength) + \
+                    compiledScript
+            signature = crypto.sign(self.privateKey, sData)
+            data = json.dumps({
+                "type": 3,
+                "senderPublicKey": self.publicKey,
+                "name": name,
+                "version": 2,
+                "quantity": quantity,
+                "timestamp": timestamp,
+                "description": description,
+                "decimals": decimals,
+                "reissuable": reissuable,
+                "fee": txFee,
+                "proofs": [ signature ],
+                "script": 'base64:' + script
+            })
+            print(data)
+            req = pywaves.wrapper('/transactions/broadcast', data)
+            if pywaves.OFFLINE:
+                return req
+            else:
+                return req

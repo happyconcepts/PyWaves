@@ -85,6 +85,10 @@ __pywaves.Address(address, publicKey, privateKey, seed)__ _Creates a new Address
 
 `dataTransaction(data, timestamp=0)` sets data for the account. data should be a json array with entries including type (bool, binary, int, string), key and value
 
+`setScript(scriptSource, txFee=pywaves.DEFAULT_SCRIPT_FEE, timestamp=0)` issue a smart asset
+
+`setAssetScript(asset, scriptSource, txFee=pywaves.DEFAULT_ASSET_SCRIPT_FEE, timestamp=0)` set a new script for a smart asset
+
 ### Asset Class
 __pywaves.Asset(assetId)__ _Creates a new Asset object_
 
@@ -257,7 +261,7 @@ myAddress.sendAsset(recipient = pw.Address('3PNTcNiUzppQXDL9RZrK3BcftbujiFqrAfM'
 ```python
 import pywaves as pw
 
-myToken = myAddress.issueToken( name = "MyToken",
+myToken = myAddress.issueAsset( name = "MyToken",
                                 description = "This is my first token",
                                 quantity = 1000000,
                                 decimals = 2 )
@@ -316,7 +320,21 @@ transfers = [
 address = pw.Address(privateKey = "CtMQWJZqfc7PRzSWiMKaGmWFm4q2VN5fMcYyKDBPDx6S")
 address.massTransferAssets(transfers, pw.Asset('9DtBNdyBCyViLZHptyF1HbQk73F6s7nQ5dXhNHubtBhd'))
 ```
+#### Data Transaction: 
+```python
+import pywaves as py
 
+myAddress = py.Address(privateKey='CtMQWJZqfc7PRzSWiMKaGmWFm4q2VN5fMcYyKDBPDx6S')
+
+data = [{
+        'type':'string', 
+        'key': 'test', 
+        'value':'testval'
+        }]
+
+myAddress.dataTransaction(data)
+
+```
 #### Token airdrop:
 ```python
 import pywaves as pw
@@ -329,6 +347,48 @@ with open('recipients.txt') as f:
 	lines = f.readlines()
 for address in lines:
 	myAddress.sendAsset(pw.Address(address.strip()), myToken, amount)
+```
+
+#### Add a script to an account:
+```python
+import pywaves as pw
+import base64
+
+pw.setNode(node='<node>', chain='testnet')
+
+script = 'match tx { \n' + \
+'  case _ => true\n' + \
+'}'
+address = pw.Address(privateKey = "<private key>")
+tx = address.setScript(script, txFee=1000000)
+```
+
+#### Issue a Smart Asset
+```python
+imort pywaves as pw
+import base64
+
+pw.setNode(node='<node>', chain='testnet')
+
+script = 'match tx { \n' + \
+'  case _ => true\n' + \
+'}'
+address = pw.Address(privateKey = '<private key>')
+tx = address.issueSmartAsset('smartTestAsset', 'an asset for testingsmart assets', 1000, script, 2)
+```
+
+#### Set a new script for a Smart Asset
+```python
+import pywaves as pw
+import base64
+
+pw.setNode(node='<node>', chain='testnet')
+
+script = 'match tx { \n' + \
+'  case _ => true\n' + \
+'}'
+address = pw.Address(privateKey = '<private key>')
+tx = address.setAssetScript(pw.Asset('<asset id>'), script)
 ```
 
 #### Playing with Waves Matcher node (DEX):
